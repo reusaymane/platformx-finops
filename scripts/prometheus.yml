@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'data-collector'
+    static_configs:
+      - targets: ['data-collector:8080']
+
+  - job_name: 'cost-analyzer'
+    static_configs:
+      - targets: ['cost-analyzer:8080']
+
+  - job_name: 'recommendation-engine'
+    static_configs:
+      - targets: ['recommendation-engine:8080']
+
+  - job_name: 'anomaly-detection'
+    static_configs:
+      - targets: ['anomaly-detection:8080']
+
+  - job_name: 'budget-alert'
+    static_configs:
+      - targets: ['budget-alert:8080']
