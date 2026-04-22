@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-data-collector
+  labels:
+    app: data-collector
+    version: {{ .Values.image.tag }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: data-collector
+  template:
+    metadata:
+      labels:
+        app: data-collector
+        version: {{ .Values.image.tag }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-data-collector
+      containers:
+        - name: data-collector
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platformx-secrets
+                  key: database-url
+            - name: COLLECT_INTERVAL
+              value: {{ .Values.env.COLLECT_INTERVAL | quote }}
+            - name: FAKE_MODE
+              value: {{ .Values.env.FAKE_MODE | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.env.AWS_REGION | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platformx
+  namespace: argocd
+spec:
+  description: PlatformX FinOps Platform
+  sourceRepos:
+    - https://github.com/reusaymane/platformx-finops
+  destinations:
+    - namespace: platformx
+      server: https://kubernetes.default.svc
+    - namespace: platformx-monitoring
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: finops.platformx.io
+      kind: FinOpsPolicy

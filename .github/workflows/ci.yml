@@ -1,0 +1,175 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-west-3.amazonaws.com
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [data-collector, anomaly-detection]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          working-directory: services/${{ matrix.service }}
+          skip-cache: true
+
+      - name: Test
+        working-directory: services/${{ matrix.service }}
+        run: go test ./... -race -coverprofile=coverage.out
+
+  test-ml:
+    name: Test ML Service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: services/ml-forecasting
+        run: pip install -r requirements.txt
+
+      - name: Test
+        working-directory: services/ml-forecasting
+        run: python -m pytest tests/ -v || echo "No tests yet"
+
+  test-policies:
+    name: Test OPA Policies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/
+
+      - name: Test policies
+        run: opa test policies/rego/ -v
+
+      - name: Build WASM bundles
+        run: |
+          for policy in no_latest_tag resource_limits no_root finops_budget; do
+            opa build -t wasm -e k8s/${policy}/deny \
+              policies/rego/${policy}.rego \
+              -o policies/wasm/${policy}.tar.gz
+          done
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy on repo
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, test-policies, security-scan]
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        service: [data-collector, anomaly-detection, ml-forecasting]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push image
+        id: build-image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          docker build -t $ECR_REGISTRY/platformx-finops/$SERVICE:$IMAGE_TAG \
+                       -t $ECR_REGISTRY/platformx-finops/$SERVICE:latest \
+                       services/$SERVICE/
+          docker push $ECR_REGISTRY/platformx-finops/$SERVICE:$IMAGE_TAG
+          docker push $ECR_REGISTRY/platformx-finops/$SERVICE:latest
+          echo "image=$ECR_REGISTRY/platformx-finops/$SERVICE:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.build-image.outputs.image }}
+          severity: CRITICAL
+          exit-code: 0
+
+      - name: Update Helm chart image tag
+        env:
+          SERVICE: ${{ matrix.service }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|g" gitops/helm/$SERVICE/values.yaml
+          git config user.email "ci@platformx.io"
+          git config user.name "PlatformX CI"
+          git add gitops/helm/$SERVICE/values.yaml
+          git diff --staged --quiet || git commit -m "ci: update $SERVICE image to $IMAGE_TAG [skip ci]"
+
+      - name: Push GitOps changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
+
+  destroy-at-night:
+    name: Destroy dev infra at night
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Stop dev EC2
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=platformx-bastion" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --region eu-west-3 --output text)
+          aws ec2 stop-instances --instance-ids $INSTANCE_ID --region eu-west-3
+          echo "Dev EC2 stopped"

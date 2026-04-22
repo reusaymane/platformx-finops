@@ -1,0 +1,27 @@
+name: Destroy dev at night
+
+on:
+  schedule:
+    - cron: '0 20 * * 1-5'  # 20h UTC du lundi au vendredi
+
+jobs:
+  stop-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-3
+
+      - name: Stop dev EC2
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=platformx-bastion" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --region eu-west-3 --output text)
+          aws ec2 stop-instances --instance-ids $INSTANCE_ID --region eu-west-3
+          echo "Dev EC2 stopped at $(date)"

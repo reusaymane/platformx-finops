@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: data-collector
+  namespace: argocd
+spec:
+  project: platformx
+  source:
+    repoURL: https://github.com/reusaymane/platformx-finops
+    targetRevision: main
+    path: gitops/helm/data-collector
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platformx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
