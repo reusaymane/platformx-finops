@@ -1,13 +1,13 @@
 replicaCount: 1
 
 image:
-  repository: ACCOUNT.dkr.ecr.eu-west-3.amazonaws.com/platformx-finops/data-collector
-  pullPolicy: IfNotPresent
+  repository: platformx-finops_data-collector
+  pullPolicy: Never
   tag: "latest"
 
 env:
   COLLECT_INTERVAL: "60s"
-  FAKE_MODE: "false"
+  FAKE_MODE: "true"
   AWS_REGION: "eu-west-3"
   LOG_LEVEL: "info"
 
@@ -18,8 +18,3 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT:role/platformx-data-collector"
